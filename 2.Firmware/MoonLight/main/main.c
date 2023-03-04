@@ -1,15 +1,48 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
+#include "esp_log.h"
+#include "esp_err.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+
 #include "led_strip_types.h"
 #include "led_strip_rmt.h"
 #include "led_strip.h"
-#include "esp_log.h"
-#include "esp_err.h"
 
 #define LED_GPIO_NUM 13         // LED灯条输出GPIO口
 #define LED_NUM 1               // LED灯条LED灯数
 #define RMT_RESOLUTION 10000000 // RMT分辨率
+#define WIFI_SSID "CMCC-9XAK"   // wifi账号
+#define WIFI_PASS "2Z9CKKLS"    // wifi密码
+#define WIFI_MAX_RETRY_NUM 5    // wifi最大尝试重连次数
+
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT BIT1
+
+#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
+
+static EventGroupHandle_t wifi_event_group_handle = NULL;
+static uint32_t s_retry_num = 0; // wifi连接重试次数
+
+void nvs_init(void)
+{
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    if (ret == ESP_OK)
+    {
+        ESP_LOGI("NVS_INFO", "NVS初始化完成");
+    }
+    else
+    {
+        ESP_ERROR_CHECK(ret);
+    }
+}
 
 /**
  * @brief HSV模型
@@ -165,8 +198,112 @@ void LED_strip_run(void *led_handle_ptr)
     }
 }
 
+/**
+ * @brief wifi事件监听函数
+ *
+ */
+static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
+        esp_wifi_connect();
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        if (s_retry_num < WIFI_MAX_RETRY_NUM)
+        {
+            esp_wifi_connect();
+            s_retry_num++;
+            ESP_LOGI("WIFI_INFO", "尝试重新连接到wifi");
+        }
+        else
+        {
+            xEventGroupSetBits(wifi_event_group_handle, WIFI_FAIL_BIT);
+        }
+        ESP_LOGI("WIFI_INFO", "连接到wifi失败");
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+    {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI("WIFI_INFO", "ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        s_retry_num = 0;
+        xEventGroupSetBits(wifi_event_group_handle, WIFI_CONNECTED_BIT);
+    }
+}
+
+/**
+ * @brief wifi初始化函数
+ *
+ */
+void wifi_init(void)
+{
+    wifi_event_group_handle = xEventGroupCreate();
+
+    ESP_ERROR_CHECK(esp_netif_init());
+
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&config));
+    ESP_LOGI("WIFI_INFO", "wifi初始化完成");
+
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+
+    esp_event_handler_instance_register(WIFI_EVENT,
+                                        ESP_EVENT_ANY_ID,
+                                        &wifi_event_handler,
+                                        NULL,
+                                        &instance_any_id);
+    esp_event_handler_instance_register(IP_EVENT,
+                                        IP_EVENT_STA_GOT_IP,
+                                        &wifi_event_handler,
+                                        NULL,
+                                        &instance_got_ip);
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
+            .threshold.authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD,
+            .sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
+        },
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    // 等待wifi连接
+    EventBits_t bits = xEventGroupWaitBits(wifi_event_group_handle,
+                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                           pdFALSE,
+                                           pdFALSE,
+                                           portMAX_DELAY);
+
+    // wifi连接信息
+    if (bits & WIFI_CONNECTED_BIT)
+    {
+        ESP_LOGI("WIFI_INFO", "成功连接到wifi SSID:%s password:%s",
+                 WIFI_SSID, WIFI_PASS);
+    }
+    else if (bits & WIFI_FAIL_BIT)
+    {
+        ESP_LOGI("WIFI_INFO", "连接到wifi失败 SSID:%s, password:%s",
+                 WIFI_SSID, WIFI_PASS);
+    }
+    else
+    {
+        ESP_LOGE("WIFI_INFO", "我也不知道发生了啥QAQ");
+    }
+}
+
 void app_main(void)
 {
+    // 初始化NVS
+    nvs_init();
+
     // LED初始化
     led_strip_handle_t led_handle = LED_strip_init();
     ESP_LOGI("LED_INFO", "灯条驱动安装成功");
@@ -174,6 +311,9 @@ void app_main(void)
     // 创建亮灯任务线程
     TaskHandle_t LED_strip_run_handle = NULL;
     xTaskCreate(LED_strip_run, "LED_strip_run", 1024 * 8, (void *)&led_handle, 2, &LED_strip_run_handle);
+
+    // wifi初始化
+    wifi_init();
 
     while (1)
     {
