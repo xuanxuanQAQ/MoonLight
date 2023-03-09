@@ -27,7 +27,9 @@
         "tuple": "c",
         "type_traits": "c",
         "utility": "c",
-        "event_groups.h": "c"
+        "event_groups.h": "c",
+        "led_strip_types.h": "c",
+        "esp_wifi.h": "c"
     },
     "idf.flashType": "UART",
     "idf.portWin": "COM3"
