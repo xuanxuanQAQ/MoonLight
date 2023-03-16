@@ -14,7 +14,7 @@
 #include "led_strip.h"
 
 #define LED_GPIO_NUM 13                                 // LED灯条输出GPIO口
-#define LED_NUM 1                                       // LED灯条LED灯数
+#define LED_NUM 10                                      // LED灯条LED灯数
 #define RMT_RESOLUTION 10000000                         // RMT分辨率
 #define WIFI_SSID "CMCC-9XAK"                           // wifi账号
 #define WIFI_PASS "2Z9CKKLS"                            // wifi密码
