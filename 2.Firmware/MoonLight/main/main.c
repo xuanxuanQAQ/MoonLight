@@ -13,13 +13,13 @@
 #include "led_strip_rmt.h"
 #include "led_strip.h"
 
-#define LED_GPIO_NUM 13                                 // LED灯条输出GPIO口
-#define LED_NUM 10                                      // LED灯条LED灯数
-#define RMT_RESOLUTION 10000000                         // RMT分辨率
-#define WIFI_SSID "CMCC-9XAK"                           // wifi账号
-#define WIFI_PASS "2Z9CKKLS"                            // wifi密码
-#define WIFI_MAX_RETRY_NUM 5                            // wifi最大尝试重连次数
-#define MQTT_BROKER_URL "mqtt://emqx@120.26.40.90:1883" // MQTT服务器地址
+#define LED_GPIO_NUM 13                                  // LED灯条输出GPIO口
+#define LED_NUM 1                                        // LED灯条LED灯数
+#define RMT_RESOLUTION 10000000                          // RMT分辨率
+#define WIFI_SSID "CMCC-9XAK"                            // wifi账号
+#define WIFI_PASS "2Z9CKKLS"                             // wifi密码
+#define WIFI_MAX_RETRY_NUM 5                             // wifi最大尝试重连次数
+#define MQTT_BROKER_URL "mqtt://emqx@82.157.235.69:1883" // MQTT服务器地址
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
@@ -80,7 +80,7 @@ void nvs_init(void)
     }
     if (ret == ESP_OK)
     {
-        ESP_LOGI("NVS_INFO", "NVS初始化完成");
+        ESP_LOGI("NVS_INFO", "NVS初始化完成喵~");
     }
     else
     {
@@ -225,7 +225,7 @@ void LED_strip_run(void *led_handle_ptr)
     led_strip_handle_t led_handle = *(led_strip_handle_t *)led_handle_ptr;
 
     LED_color_init(hue, saturation, value);
-    ESP_LOGI("LED_INFO", "ESP灯条颜色初始化完成");
+    ESP_LOGI("LED_INFO", "ESP灯条颜色初始化完成喵~");
 
     while (1)
     {
@@ -259,13 +259,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI("WIFI_INFO", "尝试重新连接到wifi");
+            ESP_LOGI("WIFI_INFO", "尝试重新连接到wifi喵~");
         }
         else
         {
             xEventGroupSetBits(wifi_event_group_handle, WIFI_FAIL_BIT);
         }
-        ESP_LOGI("WIFI_INFO", "连接到wifi失败");
+        ESP_LOGI("WIFI_INFO", "连接到wifi失败了喵~");
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
@@ -291,7 +291,7 @@ void wifi_init(void)
 
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&config));
-    ESP_LOGI("WIFI_INFO", "wifi初始化完成");
+    ESP_LOGI("WIFI_INFO", "wifi初始化完成了喵~");
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
@@ -537,7 +537,7 @@ void app_main(void)
 
     // LED初始化
     led_strip_handle_t led_handle = LED_strip_init();
-    ESP_LOGI("LED_INFO", "灯条驱动安装成功");
+    ESP_LOGI("LED_INFO", "灯条驱动安装成功喵~");
 
     // 创建亮灯任务线程
     TaskHandle_t LED_strip_run_handle = NULL;
