@@ -8,6 +8,7 @@
 #include "nvs_flash.h"
 #include "mqtt_client.h"
 #include "mqtt5_client.h"
+#include "cJSON.h"
 
 #include "led_strip_types.h"
 #include "led_strip_rmt.h"
@@ -26,6 +27,10 @@
 
 #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
 #define USE_PROPERTY_ARR_SIZE sizeof(user_property_arr) / sizeof(esp_mqtt5_user_property_item_t)
+#define MAX_TASKS 20
+
+TaskHandle_t LED_strip_run_handle = NULL;
+led_strip_handle_t led_handle = NULL;
 
 static esp_mqtt5_user_property_item_t user_property_arr[] = {
     {"board", "esp32"},
@@ -46,21 +51,12 @@ static esp_mqtt5_subscribe_property_config_t subscribe_property = {
     .no_local_flag = false,
     .retain_as_published_flag = false,
     .retain_handle = 0,
-    .is_share_subscribe = true,
-    .share_name = "group1",
+    .is_share_subscribe = false,
 };
 
-static esp_mqtt5_subscribe_property_config_t subscribe1_property = {
-    .subscribe_id = 25555,
-    .no_local_flag = true,
-    .retain_as_published_flag = false,
-    .retain_handle = 0,
-};
-
-static esp_mqtt5_unsubscribe_property_config_t unsubscribe_property = {
-    .is_share_subscribe = true,
-    .share_name = "group1",
-};
+// static esp_mqtt5_unsubscribe_property_config_t unsubscribe_property = {
+//     .is_share_subscribe = false,
+// };
 
 static esp_mqtt5_disconnect_property_config_t disconnect_property = {
     .session_expiry_interval = 60,
@@ -178,6 +174,8 @@ void LED_color_init(uint32_t *h, uint32_t *s, uint32_t *v)
     }
 }
 
+uint32_t count = 0;
+bool flag = true; // flag为true为增加，flag为false为减小
 /**
  * @brief 自定义灯光变化函数：此处为月球灯闪烁
  *
@@ -185,8 +183,6 @@ void LED_color_init(uint32_t *h, uint32_t *s, uint32_t *v)
  */
 void LED_color_input(uint32_t *h, uint32_t *s, uint32_t *v)
 {
-    static uint32_t count = 0;
-    static bool flag = true; // flag为true为增加，flag为false为减小
     count++;
     for (int i = 0; i < LED_NUM; i++)
     {
@@ -212,17 +208,14 @@ void LED_color_input(uint32_t *h, uint32_t *s, uint32_t *v)
  * @param[in] 输入灯条句柄
  *
  */
-void LED_strip_run(void *led_handle_ptr)
+void LED_strip_run()
 {
-
     uint32_t red[LED_NUM] = {0};
     uint32_t green[LED_NUM] = {0};
     uint32_t blue[LED_NUM] = {0};
     uint32_t hue[LED_NUM] = {0};
     uint32_t saturation[LED_NUM] = {0};
     uint32_t value[LED_NUM] = {0};
-
-    led_strip_handle_t led_handle = *(led_strip_handle_t *)led_handle_ptr;
 
     LED_color_init(hue, saturation, value);
     ESP_LOGI("LED_INFO", "ESP灯条颜色初始化完成喵~");
@@ -378,6 +371,72 @@ static void log_error_if_nonzero(const char *message, int error_code)
     }
 }
 
+/**
+ * @brief 信息处理线程函数
+ *
+ */
+static void msg_handle(char *msg)
+{
+    cJSON *json = cJSON_Parse(msg);
+    if (json == NULL)
+    {
+        ESP_LOGI("JSON", "初始化中...");
+    }
+    else
+    {
+        cJSON *switch_value = cJSON_GetObjectItem(json, "switch");
+        if (switch_value != NULL && cJSON_IsString(switch_value))
+        {
+            if (strcmp(switch_value->valuestring, "light on") == 0)
+            {
+                if (LED_strip_run_handle == NULL)
+                {
+                    xTaskCreate(LED_strip_run, "LED_strip_run", 1024 * 8, (void *)&led_handle, 1, &LED_strip_run_handle);
+                }
+                else
+                {
+                    ESP_LOGI("LED_INFO", "灯已经打开了呢");
+                }
+            }
+            else if (strcmp(switch_value->valuestring, "light off") == 0)
+            {
+                if (LED_strip_run_handle != NULL)
+                {
+                    vTaskDelete(LED_strip_run_handle);
+                    LED_strip_run_handle = NULL;
+                    // 删除LED灯条的每个LED的颜色
+                    uint32_t red[LED_NUM] = {0};
+                    uint32_t green[LED_NUM] = {0};
+                    uint32_t blue[LED_NUM] = {0};
+                    uint32_t hue[LED_NUM] = {0};
+                    uint32_t saturation[LED_NUM] = {0};
+                    uint32_t value[LED_NUM] = {0};
+                    for (int i = 0; i < LED_NUM; i++)
+                    {
+                        led_strip_hsv2rgb(hue[i], saturation[i], value[i], &red[i], &green[i], &blue[i]);
+                        led_strip_set_pixel(led_handle, i, red[i], green[i], blue[i]);
+                    }
+                    // 刷新LED灯条
+                    led_strip_refresh(led_handle);
+                    count = 0;
+                    flag = true;
+                }
+                else
+                {
+                    ESP_LOGI("LED_INFO", "灯已经关掉了呢");
+                }
+            }
+        }
+        else
+        {
+            ESP_LOGE("JSON", "switch没有value值");
+        }
+        // Free the JSON object
+        cJSON_Delete(json);
+    }
+    // vTaskDelete(NULL);
+}
+
 /*
  * @brief MQTT事件监听函数
  *
@@ -416,11 +475,11 @@ static void mqtt5_event_handler(void *handler_args, esp_event_base_t base, int32
         subscribe_property.user_property = NULL;
         ESP_LOGI("MQTT_INFO", "sent subscribe successful, msg_id=%d", msg_id);
 
-        esp_mqtt5_client_set_user_property(&subscribe1_property.user_property, user_property_arr, USE_PROPERTY_ARR_SIZE);
-        esp_mqtt5_client_set_subscribe_property(client, &subscribe1_property);
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/test", 0);
-        esp_mqtt5_client_delete_user_property(subscribe1_property.user_property);
-        subscribe1_property.user_property = NULL;
+        esp_mqtt5_client_set_user_property(&subscribe_property.user_property, user_property_arr, USE_PROPERTY_ARR_SIZE);
+        esp_mqtt5_client_set_subscribe_property(client, &subscribe_property);
+        msg_id = esp_mqtt_client_subscribe(client, "/moon_light", 0);
+        esp_mqtt5_client_delete_user_property(subscribe_property.user_property);
+        subscribe_property.user_property = NULL;
         ESP_LOGI("MQTT_INFO", "sent subscribe successful, msg_id=%d", msg_id);
 
         // esp_mqtt5_client_set_user_property(&unsubscribe_property.user_property, user_property_arr, USE_PROPERTY_ARR_SIZE);
@@ -463,6 +522,13 @@ static void mqtt5_event_handler(void *handler_args, esp_event_base_t base, int32
         ESP_LOGI("MQTT_INFO", "content_type is %.*s", event->property->content_type_len, event->property->content_type);
         ESP_LOGI("MQTT_INFO", "TOPIC=%.*s", event->topic_len, event->topic);
         ESP_LOGI("MQTT_INFO", "DATA=%.*s", event->data_len, event->data);
+
+        if (strncmp(event->topic, "/moon_light", event->topic_len) == 0)
+        {
+            char msg[event->data_len];
+            strncpy(msg, event->data, event->data_len);
+            msg_handle(msg);
+        }
         break;
     case MQTT_EVENT_ERROR:
         ESP_LOGI("MQTT_INFO", "MQTT_EVENT_ERROR");
@@ -536,12 +602,11 @@ void app_main(void)
     nvs_init();
 
     // LED初始化
-    led_strip_handle_t led_handle = LED_strip_init();
+    led_handle = LED_strip_init();
     ESP_LOGI("LED_INFO", "灯条驱动安装成功喵~");
 
     // 创建亮灯任务线程
-    TaskHandle_t LED_strip_run_handle = NULL;
-    xTaskCreate(LED_strip_run, "LED_strip_run", 1024 * 8, (void *)&led_handle, 2, &LED_strip_run_handle);
+    xTaskCreate(LED_strip_run, "LED_strip_run", 1024 * 8, NULL, 1, &LED_strip_run_handle);
 
     // wifi初始化
     wifi_init();
@@ -551,6 +616,6 @@ void app_main(void)
 
     while (1)
     {
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        vTaskDelay(pdMS_TO_TICKS(100000));
     }
 }
